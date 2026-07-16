@@ -2,20 +2,94 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>My 3D Shooter</title>
     <style>
-        body { margin: 0; overflow: hidden; }
+        * {
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        body, html { 
+            margin: 0; 
+            padding: 0;
+            overflow: hidden; 
+            width: 100%;
+            height: 100%;
+            position: fixed; /* Prevents bounce scrolling on iOS */
+        }
         #blocker {
             position: absolute; width: 100%; height: 100%;
-            background-color: rgba(0,0,0,0.5);
+            background-color: rgba(0,0,0,0.6);
             display: flex; justify-content: center; align-items: center;
             color: white; font-family: sans-serif; font-size: 24px; cursor: pointer;
+            z-index: 10;
+        }
+        /* Mobile HUD Layout */
+        #mobile-hud {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            z-index: 5;
+            pointer-events: none; /* Let clicks pass through to the screen */
+            display: none; /* Hidden by default, shown via JS on mobile */
+        }
+        /* Virtual Joystick Container */
+        #joystick-container {
+            position: absolute;
+            bottom: 40px;
+            left: 40px;
+            width: 120px;
+            height: 120px;
+            background: rgba(255, 255, 255, 0.2);
+            border: 2px solid rgba(255, 255, 255, 0.4);
+            border-radius: 50%;
+            pointer-events: auto; /* Active for touch */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        /* Virtual Joystick Knob */
+        #joystick-knob {
+            width: 50px;
+            height: 50px;
+            background: rgba(255, 255, 255, 0.7);
+            border-radius: 50%;
+            position: absolute;
+        }
+        /* Right side of screen for looking around */
+        #touch-look-zone {
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 50%;
+            height: 100%;
+            pointer-events: auto;
+        }
+        /* Crosshair in the middle of the screen */
+        #crosshair {
+            position: absolute;
+            top: 50%; left: 50%;
+            width: 10px; height: 10px;
+            background: white;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 4;
+            pointer-events: none;
+            border: 1px solid black;
         }
     </style>
 </head>
 <body>
-    <div id="blocker">Click to Play</div>
+    <div id="blocker">Click / Tap to Play</div>
+    <div id="crosshair"></div>
+
+    <div id="mobile-hud">
+        <div id="joystick-container">
+            <div id="joystick-knob"></div>
+        </div>
+        <div id="touch-look-zone"></div>
+    </div>
 
     <script type="importmap">
       {
@@ -30,99 +104,252 @@
         import * as THREE from 'three';
         import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 
-        // 1. Setup Scene, Camera, and Renderer
+        // --- 1. Device Detection ---
+        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        const mobileHud = document.getElementById('mobile-hud');
+        if (isMobile) {
+            mobileHud.style.display = 'block';
+        }
+
+        // --- 2. Setup Scene, Camera, and Renderer ---
         const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0xefd1b5);
+        scene.background = new THREE.Color(0xefd1b5); // Sky color
         scene.fog = new THREE.FogExp2(0xefd1b5, 0.0025);
 
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // Limits pixel ratio for mobile performance
         document.body.appendChild(renderer.domElement);
 
-        // 2. Add Lighting
+        // --- 3. Add Lighting ---
         const light = new THREE.HemisphereLight(0xeeeeff, 0x777788, 2.5);
         scene.add(light);
 
-        // 3. Create a Floor and Obstacles (Voxel / Block Style like Kirka)
+        // --- 4. Create Voxel/Block Environment ---
         const floorGeo = new THREE.PlaneGeometry(2000, 2000);
         floorGeo.rotateX(-Math.PI / 2);
-        const floorMat = new THREE.MeshBasicMaterial({ color: 0x557a46 });
+        const floorMat = new THREE.MeshBasicMaterial({ color: 0x557a46 }); // Green grass floor
         const floor = new THREE.Mesh(floorGeo, floorMat);
         scene.add(floor);
 
-        // Add some random blocks
+        // Generating a grid of block obstacles like Minecraft / Kirka maps
         const boxGeo = new THREE.BoxGeometry(20, 20, 20);
-        const boxMat = new THREE.MeshStandardMaterial({ color: 0x8b5a2b });
-        for (let i = 0; i < 50; i++) {
+        const boxMat = new THREE.MeshStandardMaterial({ color: 0x8b5a2b }); // Brown blocks
+        for (let i = 0; i < 60; i++) {
             const box = new THREE.Mesh(boxGeo, boxMat);
-            box.position.x = Math.random() * 400 - 200;
-            box.position.z = Math.random() * 400 - 200;
+            box.position.x = Math.floor(Math.random() * 20 - 10) * 20;
+            box.position.z = Math.floor(Math.random() * 20 - 10) * 20;
             box.position.y = 10;
             scene.add(box);
         }
 
-        // 4. Controls & Movement Setup
-        const controls = new PointerLockControls(camera, document.body);
-        const blocker = document.getElementById('blocker');
+        camera.position.y = 10; // Set player eye height
 
-        blocker.addEventListener('click', () => controls.lock());
-        controls.addEventListener('lock', () => blocker.style.display = 'none');
-        controls.addEventListener('unlock', () => blocker.style.display = 'flex');
+        // --- 5. Controls System ---
+        const blocker = document.getElementById('blocker');
+        const controls = new PointerLockControls(camera, document.body);
 
         let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
         const velocity = new THREE.Vector3();
         const direction = new THREE.Vector3();
 
-        window.addEventListener('keydown', (e) => {
-            if (e.code === 'KeyW') moveForward = true;
-            if (e.code === 'KeyS') moveBackward = true;
-            if (e.code === 'KeyA') moveLeft = true;
-            if (e.code === 'KeyD') moveRight = true;
+        // Mobile Camera Variables
+        let euler = new THREE.Euler(0, 0, 0, 'YXZ');
+        let touchStart = { x: 0, y: 0 };
+
+        // Desktop PointerLock trigger
+        blocker.addEventListener('click', () => {
+            if (!isMobile) {
+                controls.lock();
+            } else {
+                blocker.style.display = 'none';
+            }
         });
 
-        window.addEventListener('keyup', (e) => {
-            if (e.code === 'KeyW') moveForward = false;
-            if (e.code === 'KeyS') moveBackward = false;
-            if (e.code === 'KeyA') moveLeft = false;
-            if (e.code === 'KeyD') moveRight = false;
+        if (!isMobile) {
+            controls.addEventListener('lock', () => blocker.style.display = 'none');
+            controls.addEventListener('unlock', () => blocker.style.display = 'flex');
+
+            // Desktop Keyboards
+            window.addEventListener('keydown', (e) => {
+                if (e.code === 'KeyW') moveForward = true;
+                if (e.code === 'KeyS') moveBackward = true;
+                if (e.code === 'KeyA') moveLeft = true;
+                if (e.code === 'KeyD') moveRight = true;
+            });
+
+            window.addEventListener('keyup', (e) => {
+                if (e.code === 'KeyW') moveForward = false;
+                if (e.code === 'KeyS') moveBackward = false;
+                if (e.code === 'KeyA') moveLeft = false;
+                if (e.code === 'KeyD') moveRight = false;
+            });
+        }
+
+        // --- 6. Mobile Touch Controls Setup ---
+        const joystickContainer = document.getElementById('joystick-container');
+        const joystickKnob = document.getElementById('joystick-knob');
+        const lookZone = document.getElementById('touch-look-zone');
+
+        let joystickActive = false;
+        let joystickTouchId = null;
+        let joystickCenter = { x: 0, y: 0 };
+        
+        // Mobile Vector Movements
+        let mobileMoveX = 0;
+        let mobileMoveZ = 0;
+
+        // Joystick Event Listeners
+        joystickContainer.addEventListener('touchstart', (e) => {
+            joystickActive = true;
+            const touch = e.targetTouches[0];
+            joystickTouchId = touch.identifier;
+            
+            const rect = joystickContainer.getBoundingClientRect();
+            joystickCenter.x = rect.left + rect.width / 2;
+            joystickCenter.y = rect.top + rect.height / 2;
+        }, { passive: true });
+
+        window.addEventListener('touchmove', (e) => {
+            if (!joystickActive) return;
+            
+            // Find our specific joystick touch item
+            let touch = null;
+            for(let i=0; i<e.touches.length; i++) {
+                if(e.touches[i].identifier === joystickTouchId) {
+                    touch = e.touches[i];
+                    break;
+                }
+            }
+            if(!touch) return;
+
+            const deltaX = touch.clientX - joystickCenter.x;
+            const deltaY = touch.clientY - joystickCenter.y;
+            const distance = Math.min(Math.sqrt(deltaX*deltaX + deltaY*deltaY), 50); // limit 50px radius
+            
+            const angle = Math.atan2(deltaY, deltaX);
+            
+            // Move Visual Knob
+            joystickKnob.style.transform = `translate(${Math.cos(angle)*distance}px, ${Math.sin(angle)*distance}px)`;
+            
+            // Convert to movement force (-1 to 1 range)
+            mobileMoveX = (Math.cos(angle) * (distance / 50));
+            mobileMoveZ = (Math.sin(angle) * (distance / 50));
+        }, { passive: false });
+
+        const resetJoystick = () => {
+            joystickActive = false;
+            joystickTouchId = null;
+            joystickKnob.style.transform = 'translate(0px, 0px)';
+            mobileMoveX = 0;
+            mobileMoveZ = 0;
+        };
+
+        window.addEventListener('touchend', (e) => {
+            if(joystickActive) {
+                let stillActive = false;
+                for(let i=0; i<e.touches.length; i++) {
+                    if(e.touches[i].identifier === joystickTouchId) stillActive = true;
+                }
+                if(!stillActive) resetJoystick();
+            }
         });
+        window.addEventListener('touchcancel', resetJoystick);
 
-        camera.position.y = 10; // Eye height
+        // Mobile Look Zone Swipe Control
+        let lookTouchId = null;
+        lookZone.addEventListener('touchstart', (e) => {
+            const touch = e.targetTouches[0];
+            lookTouchId = touch.identifier;
+            touchStart.x = touch.clientX;
+            touchStart.y = touch.clientY;
+            
+            // Keep camera angles tracked properly
+            euler.setFromQuaternion(camera.quaternion);
+        }, { passive: true });
 
-        // 5. Game Loop
+        window.addEventListener('touchmove', (e) => {
+            let touch = null;
+            for(let i=0; i<e.touches.length; i++) {
+                if(e.touches[i].identifier === lookTouchId) {
+                    touch = e.touches[i];
+                    break;
+                }
+            }
+            if (!touch) return;
+
+            const movementX = touch.clientX - touchStart.x;
+            const movementY = touch.clientY - touchStart.y;
+
+            touchStart.x = touch.clientX;
+            touchStart.y = touch.clientY;
+
+            // Sensitivity setting for mobile look
+            const sensitivity = 0.005; 
+            euler.y -= movementX * sensitivity;
+            euler.x -= movementY * sensitivity;
+
+            // Restrict camera from looking completely upside down
+            euler.x = Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, euler.x));
+
+            camera.quaternion.setFromEuler(euler);
+        }, { passive: true });
+
+        // --- 7. Main Game Loop ---
         let prevTime = performance.now();
+        
         function animate() {
             requestAnimationFrame(animate);
 
-            if (controls.isLocked) {
-                const time = performance.now();
-                const delta = (time - prevTime) / 1000;
+            const time = performance.now();
+            const delta = (time - prevTime) / 1000;
 
-                // Apply deceleration (friction)
-                velocity.x -= velocity.x * 10.0 * delta;
-                velocity.z -= velocity.z * 10.0 * delta;
+            // Apply friction/deceleration to movement smoothly
+            velocity.x -= velocity.x * 10.0 * delta;
+            velocity.z -= velocity.z * 10.0 * delta;
 
-                direction.z = Number(moveForward) - Number(moveBackward);
-                direction.x = Number(moveRight) - Number(moveLeft);
-                direction.normalize();
+            if (!isMobile) {
+                // Desktop Keyboard Core Calculations
+                if (controls.isLocked) {
+                    direction.z = Number(moveForward) - Number(moveBackward);
+                    direction.x = Number(moveRight) - Number(moveLeft);
+                    direction.normalize();
 
-                // Apply movement acceleration
-                if (moveForward || moveBackward) velocity.z -= direction.z * 400.0 * delta;
-                if (moveLeft || moveRight) velocity.x -= direction.x * 400.0 * delta;
+                    if (moveForward || moveBackward) velocity.z -= direction.z * 400.0 * delta;
+                    if (moveLeft || moveRight) velocity.x -= direction.x * 400.0 * delta;
 
-                // Move camera
-                controls.moveRight(-velocity.x * delta);
-                controls.moveForward(-velocity.z * delta);
+                    controls.moveRight(-velocity.x * delta);
+                    controls.moveForward(-velocity.z * delta);
+                }
+            } else {
+                // Mobile Touch Movement Calculations
+                if (mobileMoveX !== 0 || mobileMoveZ !== 0) {
+                    // Calculate forward and sideways based on camera direction
+                    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+                    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+                    
+                    // Keep movement locked strictly horizontally on the ground
+                    forward.y = 0;
+                    right.y = 0;
+                    forward.normalize();
+                    right.normalize();
 
-                prevTime = time;
+                    // Speed factor on mobile
+                    const speed = 45 * delta; 
+                    
+                    camera.position.addScaledVector(forward, -mobileMoveZ * speed);
+                    camera.position.addScaledVector(right, mobileMoveX * speed);
+                }
             }
 
+            prevTime = time;
             renderer.render(scene, camera);
         }
+        
         animate();
 
-        // Handle window resizing
+        // --- 8. Window Resizing Handler ---
         window.addEventListener('resize', () => {
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
@@ -131,4 +358,3 @@
     </script>
 </body>
 </html>
-
